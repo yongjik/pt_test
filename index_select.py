@@ -1,19 +1,34 @@
-#!/usr/bin/env python
+#!/bin/sh
+# coding=utf-8
+"exec" "python" "-u" "$0" "$@"
 #
 # Checking the speed of index_select (indexSelectLargeIndex).
 
 import collections
 import itertools
 import time
+
 import numpy as np
 import torch
+
+import test_util
 
 class Tester(object):
     def __init__(self):
         pass
 
-    def run(self, cnt, dimensions):
-        self.cnt = cnt
+    # Given a tuple 'dimensions' of sizes, run the test on every permutation
+    # such that:
+    #   (1) pick one size as 'out_sz',
+    #   (2) pick a permutation of the rest as 'in_shape',
+    #   (3) pick one dimension as 'idx_dim'.
+    def run(self, rep_count, dimensions, prob=1.0):
+        test_util.rep_count = rep_count
+        self.prob = prob
+
+        print('\n\n====================\n'
+              'rep_count = {} dimensions = {}'
+              .format(rep_count, dimensions))
 
         for idx in range(len(dimensions)):
             out_sz = dimensions[idx]
@@ -25,50 +40,102 @@ class Tester(object):
                 for idx_dim in range(len(dims)):
                     self._run_test2(in_shape, idx_dim, out_sz)
 
+    # Build tensors A, B in every possible strides (as long as the storage has
+    # no missing holes), and run the test.
     def _run_test2(self, in_shape, idx_dim, out_sz):
         in_sz = in_shape[idx_dim]
         out_shape = in_shape.copy()
         out_shape[idx_dim] = out_sz
 
-        print()
+        print('in_shape = {} idx_dim = {} out_sz = {}'
+              .format(in_shape, idx_dim, out_sz))
 
         for perm1 in itertools.permutations(range(len(in_shape))):
-            A = self._mktensor(in_shape, perm1)
+            B = None
+
+            test_type = '{} {} {} {}'.format(
+                in_shape, idx_dim, out_sz, perm1)
+            if test_util.stable_pseudorandom(test_type) < self.prob:
+                B = self._mktensor(in_shape, perm1)
+
+                print('  out = {} (stride {}) dim = {}'
+                      .format(out_shape, B.stride(), idx_dim))
+                self._test_fill(out_sz, B, idx_dim)
 
             for perm2 in itertools.permutations(range(len(in_shape))):
-                B = self._mktensor(out_shape, perm2)
+                # Randomly sample test cases.
+                test_type = '{} {} {} {} {}'.format(
+                    in_shape, idx_dim, out_sz, perm1, perm2)
+                if test_util.stable_pseudorandom(test_type) > self.prob:
+                    continue
 
-                print(
-                    'in = {} (stride {}) out = {} (stride {}) dim = {}'
-                        .format(in_shape, A.stride(),
-                                out_shape, B.stride(), idx_dim))
+                if B is None: B = self._mktensor(in_shape, perm1)
+                A = self._mktensor(out_shape, perm2)
 
+                print('  in = {} (stride {}) out = {} (stride {}) dim = {}'
+                      .format(in_shape, A.stride(),
+                              out_shape, B.stride(), idx_dim))
                 self._run_test3(A, B, idx_dim)
+
+    def _test_fill(self, fill_cnt, B, idx_dim):
+        out_sz = B.shape[idx_dim]
+
+        for name, idxs in self._make_fill_idx(fill_cnt, out_sz).items():
+            B.uniform_(-0.1, 0.1)
+            B0 = B.cpu()
+            B.index_fill_(idx_dim, idxs, 1.0)
+            B0.index_fill_(idx_dim, idxs.cpu(), 1.0)
+
+            assert (B.cpu() - B0).norm() < 1e-4
+
+            test_util.time_cuda(
+                'index_fill_', name,
+                lambda: B.index_fill_(idx_dim, idxs, 1.0))
 
     def _run_test3(self, A, B, idx_dim):
         in_sz = A.shape[idx_dim]
         out_sz = B.shape[idx_dim]
 
         for name, idxs in self._make_scatter_idx(in_sz, out_sz).items():
-            self._timeit(
+            A.uniform_(-0.1, 0.1)
+            B.uniform_(-0.1, 0.1)
+            A0, B0, idxs0 = A.cpu(), B.cpu(), idxs.cpu()
+            B.index_add_(idx_dim, idxs, A)
+            B0.index_add_(idx_dim, idxs0, A0)
+            assert (B.cpu() - B0).norm() < 1e-4
+
+            B.index_copy_(idx_dim, idxs, A)
+            B0.index_copy_(idx_dim, idxs0, A0)
+            assert (B.cpu() - B0).norm() < 1e-4
+
+            test_util.time_cuda(
                 'index_add_', name,
                 lambda: B.index_add_(idx_dim, idxs, A))
 
-            self._timeit(
+            test_util.time_cuda(
                 'index_copy_', name,
                 lambda: B.index_copy_(idx_dim, idxs, A))
 
-        for name, idxs in self._make_fill_idx(in_sz, out_sz).items():
-            self._timeit(
-                'index_fill_', name,
-                lambda: B.index_fill_(idx_dim, idxs, 1.0))
-
         ptr = B.data_ptr()
+        stride = B.stride()
+        storage_sz = B.storage().size()
+
         for name, idxs in self._make_gather_idx(in_sz, out_sz).items():
-            self._timeit(
+            A.uniform_(-0.1, 0.1)
+            B.uniform_(-0.1, 0.1)
+            A0, B0, idxs0 = A.cpu(), B.cpu(), idxs.cpu()
+            A.index_select(idx_dim, idxs, out=B)
+            A0.index_select(idx_dim, idxs0, out=B0)
+            assert (B.cpu() - B0).norm() < 1e-4
+
+            test_util.time_cuda(
                 'index_select', name,
                 lambda: A.index_select(idx_dim, idxs, out=B))
-        assert B.data_ptr() == ptr  # Sanity check.
+
+        # Sanity check.
+        assert B.data_ptr() == ptr and \
+               B.stride() == stride and \
+               B.storage().size() == storage_sz
 
     # Create a tensor of the given shape, where dimensions are ordered by
     # 'perm'.
@@ -89,17 +156,6 @@ class Tester(object):
         B.uniform_(-0.1, 0.1)
 
         return B
-
-    def _timeit(self, name1, name2, cb):
-        torch.cuda.synchronize()
-        T0 = time.time()
-        for step in range(self.cnt):
-            cb()
-        torch.cuda.synchronize()
-        T1 = time.time()
-
-        print('  %-15s %-15s : Elapsed %.4f ms' %
-              (name1, name2, (T1 - T0) / self.cnt * 1000.0))
 
     #---------------------------------------------
     # Create indices.
@@ -127,28 +183,28 @@ class Tester(object):
 
     # A "fill index" simply selects some rows to fill.  Indices can be
     # duplicated (because we will simply write the same value).
-    def _make_fill_idx(self, idx_sz, out_sz):
+    def _make_fill_idx(self, fill_cnt, out_sz):
         idxs = collections.OrderedDict()
 
         def _cap(A): return np.minimum(A, out_sz - 1)
 
-        idxs['const'] = np.zeros(idx_sz, dtype=np.int)
+        idxs['const'] = np.zeros(fill_cnt, dtype=np.int)
 
-        A = _cap(np.arange(idx_sz))
+        A = _cap(np.arange(fill_cnt))
         idxs['linear'] = A
         idxs['reverse'] = A[::-1].copy()
         idxs['skip64'] = np.floor_divide(A, 64) * 64
         idxs['skip256'] = np.floor_divide(A, 256) * 256
 
-        A = np.arange(idx_sz) * (out_sz / idx_sz)
+        A = np.arange(fill_cnt) * (out_sz / fill_cnt)
         idxs['strided'] = _cap(A.astype(np.int))
 
-        A = np.random.randint(0, out_sz, idx_sz)
+        A = np.random.randint(0, out_sz, fill_cnt)
         idxs['random'] = A
         idxs['random_sorted'] = np.sort(A)
 
-        if idx_sz <= out_sz:
-            A = np.random.permutation(out_sz)[:idx_sz]
+        if fill_cnt <= out_sz:
+            A = np.random.permutation(out_sz)[:fill_cnt]
             idxs['perm'] = A
             idxs['perm_sorted'] = np.sort(A)
 
@@ -189,5 +245,11 @@ class Tester(object):
         return idxs
 
 tester = Tester()
-tester.run(100, [2, 3, 5])
+tester.run(20, [20, 40, 50, 100, 256], 0.0005)
+tester.run(100, [4, 5, 16, 20, 40], 0.01)
+tester.run(100, [15, 50, 150, 250], 0.1)
 
+tester.run(1000, [2, 3, 5])
+tester.run(500, [32, 256, 512])
+tester.run(100, [255, 256, 512])
+tester.run(100, [15, 1000, 2048])
