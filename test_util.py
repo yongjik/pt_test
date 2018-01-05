@@ -7,6 +7,7 @@ import traceback
 
 import torch
 
+batch_count = 3
 rep_count = 100
 
 def try_cmd(cmd_id, cb):
@@ -22,14 +23,7 @@ def time_cuda(*args):
     cb = args[-1]
     assert callable(cb)
 
-    torch.cuda.synchronize()
-    T0 = time.time()
-    for _ in range(rep_count):
-        cb()
-    torch.cuda.synchronize()
-    T1 = time.time()
-
-    total_duration = (T1 - T0) * 1000.0
+    total_duration = min(time_cuda2(cb) for _ in range(batch_count))
     duration = total_duration / rep_count
 
     if len(args) >= 2:
@@ -39,6 +33,17 @@ def time_cuda(*args):
         print('    Elapsed %.3f ms (%.3f ms / %d)' %
               (duration, total_duration, rep_count))
     return duration
+
+# Run the callback 'rep_count' times and return the duration in msec.
+def time_cuda2(cb):
+    torch.cuda.synchronize()
+    T0 = time.time()
+    for _ in range(rep_count):
+        cb()
+    torch.cuda.synchronize()
+    T1 = time.time()
+
+    return (T1 - T0) * 1000.0
 
 # Helper function for generatic a stable pseudorandom value in [0.0, 1.0): it is
 # used to designate a predefined portion of the training data for testing.
