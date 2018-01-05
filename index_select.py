@@ -47,34 +47,39 @@ class Tester(object):
         out_shape = in_shape.copy()
         out_shape[idx_dim] = out_sz
 
-        print('in_shape = {} idx_dim = {} out_sz = {}'
-              .format(in_shape, idx_dim, out_sz))
+        print('out_shape = {} in_shape = {} idx_dim = {}'
+              .format(out_shape, in_shape, idx_dim))
 
-        for perm1 in itertools.permutations(range(len(in_shape))):
+        for perm1 in itertools.permutations(range(len(out_shape))):
             B = None
 
             test_type = '{} {} {} {}'.format(
-                in_shape, idx_dim, out_sz, perm1)
-            if test_util.stable_pseudorandom(test_type) < self.prob:
-                B = self._mktensor(in_shape, perm1)
+                out_shape, in_shape, idx_dim, perm1)
+            r = test_util.stable_pseudorandom(test_type)
+            if r < self.prob:
+                B = self._mktensor(out_shape, perm1)
 
-                print('  out = {} (stride {}) dim = {}'
-                      .format(out_shape, B.stride(), idx_dim))
-                self._test_fill(out_sz, B, idx_dim)
+                # 'in_sz' is used as the # of rows to fill here.
+                print('  B = {} (stride {}) dim = {} fill_cnt = {}'
+                      .format(out_shape, B.stride(), idx_dim, in_sz))
+                np.random.seed(int(r * 100000))
+                self._test_fill(in_sz, B, idx_dim)
 
             for perm2 in itertools.permutations(range(len(in_shape))):
                 # Randomly sample test cases.
                 test_type = '{} {} {} {} {}'.format(
-                    in_shape, idx_dim, out_sz, perm1, perm2)
-                if test_util.stable_pseudorandom(test_type) > self.prob:
+                    out_shape, in_shape, idx_dim, perm1, perm2)
+                r = test_util.stable_pseudorandom(test_type)
+                if r > self.prob:
                     continue
 
-                if B is None: B = self._mktensor(in_shape, perm1)
-                A = self._mktensor(out_shape, perm2)
+                if B is None: B = self._mktensor(out_shape, perm1)
+                A = self._mktensor(in_shape, perm2)
 
-                print('  in = {} (stride {}) out = {} (stride {}) dim = {}'
-                      .format(in_shape, A.stride(),
-                              out_shape, B.stride(), idx_dim))
+                print('  B = {} (stride {}) A = {} (stride {}) dim = {}'
+                      .format(out_shape, B.stride(),
+                              in_shape, A.stride(), idx_dim))
+                np.random.seed(int(r * 100000))
                 self._run_test3(A, B, idx_dim)
 
     def _test_fill(self, fill_cnt, B, idx_dim):
@@ -218,6 +223,7 @@ class Tester(object):
         def _cap(A): return np.minimum(A, in_sz - 1)
 
         idxs['const'] = np.zeros(out_sz, dtype=np.int)
+        idxs['wrap'] = np.arange(out_sz) % in_sz
 
         A = _cap(np.arange(out_sz))
         idxs['linear'] = A
@@ -244,10 +250,13 @@ class Tester(object):
             idxs[key] = torch.LongTensor(idxs[key]).cuda()
         return idxs
 
+test_util.batch_count = 1
+
 tester = Tester()
 tester.run(20, [20, 40, 50, 100, 256], 0.0005)
 tester.run(100, [4, 5, 16, 20, 40], 0.01)
 tester.run(100, [15, 50, 150, 250], 0.1)
+tester.run(100, [1, 5, 200, 500], 0.1)
 
 tester.run(1000, [2, 3, 5])
 tester.run(500, [32, 256, 512])

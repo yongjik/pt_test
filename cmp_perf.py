@@ -5,34 +5,36 @@
 import re
 import sys
 
-file1, file2 = sys.argv[1:]
-file1, file2 = open(file1), open(file2)
+files = sys.argv[1:]
+assert len(files) >= 2
+files = [open(f) for f in files]
 
 while True:
-    line1 = file1.readline()
-    line2 = file2.readline()
+    lines = [f.readline() for f in files]
 
-    assert (line1 == '') == (line2 == '')
-    if line1 == '': break
+    is_eof = sum(line == '' for line in lines)
+    assert is_eof in (0, len(files)), lines
+    if is_eof: break
 
-    line1 = line1.rstrip('\n')
-    line2 = line2.rstrip('\n')
+    lines = [line.rstrip('\n') for line in lines]
 
     pat = r'Elapsed.*\(([0-9.]+) ms'
-    dur1 = re.search(pat, line1)
-    dur2 = re.search(pat, line2)
+    durations = [re.search(pat, line) for line in lines]
 
-    if dur1 is None:
-        assert dur1 == dur2
-        print(line1)
-    else:
-        assert dur2 is not None
-        dur1 = dur1.group(1)
-        dur2 = dur2.group(1)
-        diff = (float(dur2) - float(dur1)) / float(dur1)
+    assert sum(dur is None for dur in durations) in (0, len(files)), lines
 
-        important = abs(diff) > 0.1
+    if durations[0] is None:
+        print(lines[0])
+        continue
 
-        print('%5s  %7s -> %7s (%+6.2f%%) %s' %
-              ('!!!!!' if important else '     ',
-               dur1, dur2, diff * 100.0, line1))
+    durations = [dur.group(1) for dur in durations]
+    base = float(durations[0])
+    diffs = [(float(dur) - base) / base for dur in durations[1:]]
+    important = any(abs(diff) > 0.1 for diff in diffs)
+
+    print('%5s  %7s -> %s (%s) %s' %
+          ('!!!!!' if important else '     ',
+           base,
+           ' '.join('%7s' % dur for dur in durations[1:]),
+           ' '.join('%+6.2f%%' % (diff * 100.0) for diff in diffs),
+           lines[0]))
