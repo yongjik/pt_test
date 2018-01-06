@@ -5,6 +5,7 @@
 # Checking the speed of index_select (indexSelectLargeIndex).
 
 import collections
+import fractions
 import itertools
 import time
 
@@ -12,6 +13,8 @@ import numpy as np
 import torch
 
 import test_util
+
+STRIDES_ = [3, 5, 7, 8, 16, 64, 100, 255, 256, 257]
 
 class Tester(object):
     def __init__(self):
@@ -165,9 +168,13 @@ class Tester(object):
     #---------------------------------------------
     # Create indices.
 
-    # A "scatter index" scatters each input row to some output row.  Indices
-    # must be distinct (because otherwise two input rows will try to write into
-    # the same output row).
+    # A "scatter index" is used to test index_add_() and index_copy_(): it
+    # scatters each input row in [0, in_sz) in to some output row in [0,
+    # out_sz).  Hence, an index contains 'in_sz' values, with each value in [0,
+    # out_sz).
+    #
+    # Indices must be distinct (because otherwise two input rows will try to
+    # write into the same output row).
     def _make_scatter_idx(self, in_sz, out_sz):
         idxs = collections.OrderedDict()
 
@@ -177,16 +184,25 @@ class Tester(object):
         idxs['linear'] = A
         idxs['reverse'] = A[::-1].copy()
 
+        # Spread evenly over [0, out_sz).
         A = np.arange(in_sz) * (out_sz / in_sz)
-        idxs['strided'] = A.astype(np.int)
+        idxs['spread'] = A.astype(np.int)
 
+        # Strides.
+        for stride in STRIDES_:
+            if stride < out_sz and fractions.gcd(stride, out_sz) == 1:
+                A = (np.arange(in_sz) * stride) % out_sz
+                assert len(np.unique(A)) == in_sz  # Sanity check.
+                idxs['strided %d' % stride] = A
+
+        # Random permutations and sorted version.
         A = np.random.permutation(out_sz)[:in_sz]
         idxs['perm'] = A
         idxs['perm_sorted'] = np.sort(A)
 
         return self._transform(idxs)
 
-    # A "fill index" simply selects some rows to fill.  Indices can be
+    # A "fill index" simply selects rows for index_fill_().  Indices can be
     # duplicated (because we will simply write the same value).
     def _make_fill_idx(self, fill_cnt, out_sz):
         idxs = collections.OrderedDict()
@@ -201,13 +217,22 @@ class Tester(object):
         idxs['skip64'] = np.floor_divide(A, 64) * 64
         idxs['skip256'] = np.floor_divide(A, 256) * 256
 
+        # Spread evenly over [0, out_sz).
         A = np.arange(fill_cnt) * (out_sz / fill_cnt)
-        idxs['strided'] = _cap(A.astype(np.int))
+        idxs['spread'] = _cap(A.astype(np.int))
 
+        # Strides.
+        for stride in STRIDES_:
+            if stride < out_sz:
+                A = (np.arange(fill_cnt) * stride) % out_sz
+                idxs['strided %d' % stride] = A
+
+        # Random values.
         A = np.random.randint(0, out_sz, fill_cnt)
         idxs['random'] = A
         idxs['random_sorted'] = np.sort(A)
 
+        # Random permutations and sorted version.
         if fill_cnt <= out_sz:
             A = np.random.permutation(out_sz)[:fill_cnt]
             idxs['perm'] = A
@@ -215,8 +240,11 @@ class Tester(object):
 
         return self._transform(idxs)
 
-    # A "gather index" selects the input row for each output row.  Indices can
-    # be duplicatd.
+    # A "gather index" is used to test index_select(): it selects the input row
+    # for each output row.  An index contains 'out_sz' values, with each value
+    # in [0, in_sz).
+    #
+    # Indices can be duplicatd.
     def _make_gather_idx(self, in_sz, out_sz):
         idxs = collections.OrderedDict()
 
@@ -231,13 +259,22 @@ class Tester(object):
         idxs['skip64'] = np.floor_divide(A, 64) * 64
         idxs['skip256'] = np.floor_divide(A, 256) * 256
 
+        # Spread evenly over [0, in_sz).
         A = np.arange(out_sz) * (in_sz / out_sz)
-        idxs['strided'] = _cap(A.astype(np.int))
+        idxs['spread'] = _cap(A.astype(np.int))
 
+        # Strides.
+        for stride in STRIDES_:
+            if stride < in_sz:
+                A = (np.arange(out_sz) * stride) % in_sz
+                idxs['strided %d' % stride] = A
+
+        # Random values.
         A = np.random.randint(0, in_sz, out_sz)
         idxs['random'] = A
         idxs['random_sorted'] = np.sort(A)
 
+        # Random permutations and sorted version.
         if out_sz <= in_sz:
             A = np.random.permutation(in_sz)[:out_sz]
             idxs['perm'] = A
