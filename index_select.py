@@ -7,6 +7,7 @@
 import collections
 import fractions
 import itertools
+import random
 import time
 
 import numpy as np
@@ -25,6 +26,9 @@ class Tester(object):
     #   (1) pick one size as 'out_sz',
     #   (2) pick a permutation of the rest as 'in_shape',
     #   (3) pick one dimension as 'idx_dim'.
+    #
+    # 'prob' is used when there are too many possible permutations: we randomly
+    # sample test cases with the given probability.
     def run(self, rep_count, dimensions, prob=1.0):
         test_util.rep_count = rep_count
         self.prob = prob
@@ -96,6 +100,7 @@ class Tester(object):
 
             assert (B.cpu() - B0).norm() < 1e-4
 
+            dummy = self._random_situation()
             test_util.time_cuda(
                 'index_fill_', name,
                 lambda: B.index_fill_(idx_dim, idxs, 1.0))
@@ -116,6 +121,7 @@ class Tester(object):
             B0.index_copy_(idx_dim, idxs0, A0)
             assert (B.cpu() - B0).norm() < 1e-4
 
+            dummy = self._random_situation()
             test_util.time_cuda(
                 'index_add_', name,
                 lambda: B.index_add_(idx_dim, idxs, A))
@@ -136,6 +142,7 @@ class Tester(object):
             A0.index_select(idx_dim, idxs0, out=B0)
             assert (B.cpu() - B0).norm() < 1e-4
 
+            dummy = self._random_situation()
             test_util.time_cuda(
                 'index_select', name,
                 lambda: A.index_select(idx_dim, idxs, out=B))
@@ -164,6 +171,20 @@ class Tester(object):
         B.uniform_(-0.1, 0.1)
 
         return B
+
+    # Build and return a randomly sized tuple of tensors, so that we have
+    # slightly different "environment" when each test case is run.  (Otherwise I
+    # observed strange test cases that are consistently slow: but when I run
+    # them by themselves I cannot reliably replicate it.)
+    def _random_situation(self):
+        def _mk():
+            sz1 = random.randint(1024, 2048)
+            sz2 = random.randint(1024, 2048)
+            return torch.cuda.FloatTensor(sz1, sz2).fill_(0.1)
+
+        x = [_mk() for _ in range(random.randint(1, 5))]
+        torch.cuda.synchronize()
+        return x
 
     #---------------------------------------------
     # Create indices.
@@ -290,8 +311,12 @@ class Tester(object):
 test_util.batch_count = 1
 
 tester = Tester()
+
+# Permutations for 4-dim tensors: takes ~50 min.
 tester.run(20, [20, 40, 50, 100, 256], 0.0005)
 tester.run(100, [4, 5, 16, 20, 40], 0.01)
+
+# Permutations for smaller tensors.
 tester.run(100, [15, 50, 150, 250], 0.1)
 tester.run(100, [1, 5, 200, 500], 0.1)
 
