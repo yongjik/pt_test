@@ -52,6 +52,8 @@ while True:
         verdict = '1Bad'
     elif best_diff >= 0.05:
         verdict = '2bad'
+    elif best_diff <= -0.5:
+        verdict = '7BEST'
     elif best_diff <= -0.2:
         verdict = '6GOOD'
     elif best_diff <= -0.1:

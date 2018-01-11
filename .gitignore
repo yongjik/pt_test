@@ -1,2 +1,6 @@
 __pycache__
 *.pyc
+diff.*
+TMP
+x.*
+xxx*
