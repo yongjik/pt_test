@@ -1,6 +1,7 @@
 from __future__ import print_function
 import hashlib
 import math
+import random
 import struct
 import time
 import traceback
@@ -36,6 +37,9 @@ def time_cuda(*args):
 
 # Run the callback 'rep_count' times and return the duration in msec.
 def time_cuda2(cb):
+    dummy = torch.cuda.FloatTensor(1000, random.randint(1, 1000)).fill_(1.0)
+    dummy *= 0.5
+
     torch.cuda.synchronize()
     T0 = time.time()
     for _ in range(rep_count):
