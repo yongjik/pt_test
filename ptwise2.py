@@ -28,7 +28,18 @@ if True:
 
     A = torch.cuda.FloatTensor(1000, 256).fill_(0.1)
     B = torch.cuda.FloatTensor(1000, 256).fill_(0.2)
-    do_test('non-cont 2 2', A[:, :200], B[:, :200])
+    A = A[:, :200]
+    B = B[:, :200]
+    do_test('non-cont 2 2', A, B)
+
+if True:
+    # Non-contiguous integer.
+    A = torch.cuda.IntTensor(1000, 256).fill_(10)
+    B = torch.cuda.IntTensor(1000, 256).fill_(20)
+    A = A[:, :200]
+    B = B[:, :200]
+    test_util.time_cuda('int non-cont 2 2', 'add', lambda: A.add_(B))
+    test_util.time_cuda('int non-cont 2 2', 'mul', lambda: A.mul_(B))
 
 if True:
     # kernelPointwiseApply2<...-2, 2>
