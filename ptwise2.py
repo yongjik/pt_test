@@ -9,49 +9,158 @@ import test_util
 
 torch.manual_seed(1)
 
-test_util.batch_count = 20
-test_util.rep_count = 500
+# test_util.batch_count = 10
 
-def do_test(title, A, B):
-    test_util.time_cuda(title, 'add', lambda: A.add_(B))
-    test_util.time_cuda(title, 'pow', lambda: A.pow_(B))
+def do_test(title, A, B, C):
+    use_pow = True
+    try:
+        A.pow_(B)
+    except:
+        use_pow = False
 
-if True:
-    # Contiguous
+    # Fill A/B/C with random values.
+    for X in A, B, C:
+        Y = torch.cuda.FloatTensor(X.shape).uniform_(1, 15)
+        X.copy_(Y)
 
-    A = torch.cuda.FloatTensor(1000, 256).fill_(0.1)
-    B = torch.cuda.FloatTensor(1000, 256).fill_(0.2)
-    do_test('cont -2 -2', A, B)
+    # Verify result: they all share the same index logic, so let's just check add().
+    do_test = True
+    try:
+        A0, B0 = A.cpu(), B.cpu()
+        A0.add_(B0)
+    except:
+        # Apparently HalfTensor doesn't work in CPU.
+        do_test = False
 
-if True:
-    # Non-contiguous
+    if do_test:
+        A.add_(B)
+        A0, B0 = A.cpu(), B.cpu()
+        assert (A.cpu() - A0).float().norm() < 1e-4
 
-    A = torch.cuda.FloatTensor(1000, 256).fill_(0.1)
-    B = torch.cuda.FloatTensor(1000, 256).fill_(0.2)
-    A = A[:, :200]
-    B = B[:, :200]
-    do_test('non-cont 2 2', A, B)
+        A0, B0 = A.cpu(), B.cpu()
+        A.add(B, out=C)
+        C0 = A0.add(B0)
+        assert (C.cpu() - C0).float().norm() < 1e-4
 
-if True:
-    # Non-contiguous integer.
-    A = torch.cuda.IntTensor(1000, 256).fill_(10)
-    B = torch.cuda.IntTensor(1000, 256).fill_(20)
-    A = A[:, :200]
-    B = B[:, :200]
-    test_util.time_cuda('int non-cont 2 2', 'add', lambda: A.add_(B))
-    test_util.time_cuda('int non-cont 2 2', 'mul', lambda: A.mul_(B))
+    test_util.time_cuda(title, 'add_', lambda: A.add_(B))
+    test_util.time_cuda(title, 'add', lambda: A.add(B, out=C))
 
-if True:
-    # kernelPointwiseApply2<...-2, 2>
-    # void kernelPointwiseApply2<TensorAddOp<float>, float, float, unsigned int, int=-2, int=2>(TensorInfo<TensorAddOp<float>, float>, TensorInfo<float, float>, float, float)
+    test_util.time_cuda(title, 'mul_', lambda: A.mul_(B))
+    test_util.time_cuda(title, 'mul', lambda: A.mul(B, out=C))
 
-    A = torch.cuda.FloatTensor(256, 256, 4).fill_(0.1)
-    B = torch.cuda.FloatTensor(256, 4).fill_(0.2)
-    do_test('bcast -2 2', A, B)
+    if use_pow:
+        test_util.time_cuda(title, 'tanh_', lambda: A.tanh_())
+        test_util.time_cuda(title, 'tanh', lambda: A.tanh(out=C))
+        test_util.time_cuda(title, 'pow_', lambda: A.pow_(B))
+        test_util.time_cuda(title, 'pow', lambda: A.pow(B, out=C))
+    else:
+        test_util.time_cuda(title, 'remainder_', lambda: A.remainder_(B))
+        test_util.time_cuda(title, 'remainder', lambda: A.remainder(B, out=C))
 
-if True:
-    # kernelPointwiseApply2<...-2, -1>
-    A = torch.cuda.FloatTensor(256, 256, 4).fill_(0.1)
-    B = torch.cuda.FloatTensor(256, 8).fill_(0.2)
-    B = B[:, :4]
-    do_test('bcast -2 -1', A, B)
+def run(tensor_type, sz1, sz2, sz2_cut):
+    RUN_PHASE = -1
+
+    if RUN_PHASE in [-1, 1]:
+        # Contiguous
+        #
+        # void kernelPointwiseApply3<TensorAddOp<float>, float, float, float,
+        # unsigned int, int=-2, int=-2, int=-2>(...)
+
+        A = tensor_type(sz1, sz2).fill_(0)
+        B = tensor_type(sz1, sz2).fill_(1)
+        C = tensor_type(sz1, sz2).fill_(2)
+
+        do_test('cont (-2) -2 -2', A, B, C)
+
+    if RUN_PHASE in [-1, 2]:
+        # Non-contiguous (Dims=1)
+        #
+        # void kernelPointwiseApply3<TensorAddOp<float>, float, float, float,
+        # unsigned int, int=-2, int=-2, int=1>(...)
+
+        A = tensor_type(sz1, sz2).fill_(0)
+        B = tensor_type(sz1, sz2, 4).fill_(1)
+        C = tensor_type(sz1, sz2).fill_(2)
+
+        B = B[:, :, 0]
+        do_test('non-cont (-2) -2 1', A, B, C)
+
+    if RUN_PHASE in [-1, 3]:
+        # Non-contiguous (Dims=2)
+        #
+        # void kernelPointwiseApply3<TensorAddOp<float>, float, float, float,
+        # unsigned int, int=2, int=2, int=2>(...)
+
+        A = tensor_type(sz1, sz2).fill_(0)
+        B = tensor_type(sz1, sz2).fill_(1)
+        C = tensor_type(sz1, sz2).fill_(2)
+
+        A = A[:, :sz2_cut]
+        B = B[:, :sz2_cut]
+        C = C[:, :sz2_cut]
+        do_test('non-cont (2) 2 2', A, B, C)
+
+    if RUN_PHASE in [-1, 4]:
+        # Contiguous broadcast
+        #
+        # void kernelPointwiseApply3<TensorAddOp<float>, float, float, float,
+        # unsigned int, int=-2, int=-2, int=2>(...)
+
+        A = tensor_type(sz1, sz2).fill_(0)
+        B = tensor_type(sz2).fill_(1)
+        C = tensor_type(sz1, sz2).fill_(2)
+        do_test('bcast (-2) -2 2', A, B, C)
+
+    if RUN_PHASE in [-1, 5]:
+        # Non-contiguous broadcast
+        #
+        # void kernelPointwiseApply3<TensorAddOp<float>, float, float, float,
+        # unsigned int, int=2, int=2, int=2>(...)
+
+        A = tensor_type(sz1, sz2).fill_(0)
+        B = tensor_type(sz2_cut).fill_(1)
+        C = tensor_type(sz1, sz2).fill_(2)
+
+        A = A[:, :sz2_cut]
+        C = C[:, :sz2_cut]
+        do_test('bcast (2) 2 2', A, B, C)
+
+    if RUN_PHASE in [-1, 6]:
+        # Non-contiguous broadcast (larger dimension)
+        #
+        # void kernelPointwiseApply3<TensorAddOp<float>, float, float, float,
+        # unsigned int, int=-2, int=-2, int=-1>(...)
+
+        A = tensor_type(sz1, sz2, 4).fill_(0)
+        B = tensor_type(sz2, 8).fill_(1)
+        C = tensor_type(sz1, sz2, 4).fill_(2)
+
+        B = B[:, :4]
+        do_test('bcast (-2) -2 -1', A, B, C)
+
+types = [
+    torch.cuda.ByteTensor,
+    torch.cuda.ShortTensor,
+    torch.cuda.IntTensor,
+    torch.cuda.LongTensor,
+    torch.cuda.HalfTensor,
+    torch.cuda.FloatTensor,
+    torch.cuda.DoubleTensor,
+]
+
+# dimension 1, dimension 2, how to slice dimension 2,
+# number of repetition for benchmarks.
+SIZES = [
+    [64, 16, 15, 1000],
+    [200, 200, 180, 500],
+    [1000, 256, 200, 500],
+    [2048, 2048, 2000, 100]
+]
+
+for tensor_type in types:
+    print('========== Testing ', tensor_type, ' ==========')
+    for sizes in SIZES:
+        print('  Testing sizes = ', sizes)
+        sz1, sz2, sz_cut, rep = sizes
+        test_util.rep_count = rep
+        run(tensor_type, sz1, sz2, sz_cut)
