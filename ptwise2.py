@@ -38,24 +38,24 @@ def do_test(title, A, B, C):
         assert (A.cpu() - A0).float().norm() < 1e-4
 
         A0, B0 = A.cpu(), B.cpu()
-        A.add(B, out=C)
+        torch.add(A, B, out=C)
         C0 = A0.add(B0)
         assert (C.cpu() - C0).float().norm() < 1e-4
 
     test_util.time_cuda(title, 'add_', lambda: A.add_(B))
-    test_util.time_cuda(title, 'add', lambda: A.add(B, out=C))
+    test_util.time_cuda(title, 'add', lambda: torch.add(A, B, out=C))
 
     test_util.time_cuda(title, 'mul_', lambda: A.mul_(B))
-    test_util.time_cuda(title, 'mul', lambda: A.mul(B, out=C))
+    test_util.time_cuda(title, 'mul', lambda: torch.mul(A, B, out=C))
 
     if use_pow:
         test_util.time_cuda(title, 'tanh_', lambda: A.tanh_())
-        test_util.time_cuda(title, 'tanh', lambda: A.tanh(out=C))
+        test_util.time_cuda(title, 'tanh', lambda: torch.tanh(A, out=C))
         test_util.time_cuda(title, 'pow_', lambda: A.pow_(B))
-        test_util.time_cuda(title, 'pow', lambda: A.pow(B, out=C))
+        test_util.time_cuda(title, 'pow', lambda: torch.pow(A, B, out=C))
     else:
         test_util.time_cuda(title, 'remainder_', lambda: A.remainder_(B))
-        test_util.time_cuda(title, 'remainder', lambda: A.remainder(B, out=C))
+        test_util.time_cuda(title, 'remainder', lambda: torch.remainder(A, B, out=C))
 
 def run(tensor_type, sz1, sz2, sz2_cuts):
     RUN_PHASE = -1
@@ -153,10 +153,11 @@ types = [
 # dimension 1, dimension 2, how to slice dimension 2,
 # number of repetition for benchmarks.
 SIZES = [
-    [64, 16, [8, 15], 1000],
-    [200, 200, [50, 100, 180], 500],
+#   [64, 16, [8, 15], 1000],
+#   [200, 200, [50, 100, 180], 500],
     [1000, 256, [64, 128, 200], 500],
     [2048, 2048, [512, 2000], 100],
+    [4096, 4096, [512, 2048, 4000], 25],
 ]
 
 for tensor_type in types:
